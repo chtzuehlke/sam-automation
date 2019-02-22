@@ -1,0 +1,290 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CI/CD for SAM Application
+Parameters:
+  CodeCommitRepositoryARN:
+    Type: String
+  CodeCommitRepositoryName:
+    Type: String
+Resources:
+  DeploymentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+  PipelineArtifsctStoreBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+  CloudFormationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "*"
+            Resource: "*"
+  CloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "cloudformation.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref CloudFormationPolicy
+      MaxSessionDuration: 3600
+      Path: /service-role/
+  TriggerEventPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "codepipeline:StartPipelineExecution"
+            Resource: !Join [ '', [ 'arn:aws:codepipeline:', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', !Ref CodePipeline ] ]
+  TriggerEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "events.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref CloudFormationPolicy
+      MaxSessionDuration: 3600
+      Path: /service-role/
+  CodePipelinePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "iam:PassRole"
+            Resource: "*"
+            Condition:
+              StringEqualsIfExists:
+                iam:PassedToService:
+                  - "cloudformation.amazonaws.com"
+                  - "elasticbeanstalk.amazonaws.com"
+                  - "ec2.amazonaws.com"
+                  - "ecs-tasks.amazonaws.com"
+          - Effect: "Allow"
+            Action:
+              - "codecommit:CancelUploadArchive"
+              - "codecommit:GetBranch"
+              - "codecommit:GetCommit"
+              - "codecommit:GetUploadArchiveStatus"
+              - "codecommit:UploadArchive"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+              - "codedeploy:CreateDeployment"
+              - "codedeploy:GetApplication"
+              - "codedeploy:GetApplicationRevision"
+              - "codedeploy:GetDeployment"
+              - "codedeploy:GetDeploymentConfig"
+              - "codedeploy:RegisterApplicationRevision"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+              - "s3:*"
+              - "cloudformation:*"
+              - "ecs:*"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+              - "codebuild:BatchGetBuilds"
+              - "codebuild:StartBuild"
+            Resource: "*"
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "codepipeline.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref CodePipelinePolicy
+      MaxSessionDuration: 3600
+      Path: /service-role/
+  CodeBuildPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Resource:
+              - !Join [ '', [ 'arn:aws:logs:', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':log-group:/aws/codebuild/', !Ref 'AWS::StackName', 'Build' ] ]
+              - !Join [ '', [ 'arn:aws:logs:', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':log-group:/aws/codebuild/', !Ref 'AWS::StackName', 'Build', ':*' ] ]
+          - Effect: "Allow"
+            Action:
+              - "s3:PutObject"
+              - "s3:GetObject"
+              - "s3:GetObjectVersion"
+              - "s3:GetBucketAcl"
+              - "s3:GetBucketLocation"
+            Resource:
+              - !Join
+                - ''
+                - - "arn:aws:s3:::"
+                  - !Ref PipelineArtifsctStoreBucket
+                  - "*"
+              - !Join
+                - ''
+                - - "arn:aws:s3:::"
+                  - !Ref DeploymentBucket
+                  - "*"
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref CodeBuildPolicy
+      MaxSessionDuration: 3600
+      Path: /service-role/
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Join [ '', [ !Ref 'AWS::StackName', 'Build' ] ]
+      Artifacts:
+        EncryptionDisabled: true
+        Name: !Join [ '', [ !Ref 'AWS::StackName', 'Pipeline' ] ]
+        Packaging: "NONE"
+        Type: "CODEPIPELINE"
+      Cache:
+        Type: "NO_CACHE"
+      Description: "CodeBuild for SAM Application"
+      Environment:
+        ComputeType: "BUILD_GENERAL1_SMALL"
+        EnvironmentVariables:
+          - Name: "DEPLOYMENT_BUCKET"
+            Type: "PLAINTEXT"
+            Value: !Ref DeploymentBucket
+        Image: "aws/codebuild/python:3.7.1"
+        ImagePullCredentialsType: "CODEBUILD"
+        PrivilegedMode: false
+        Type: "LINUX_CONTAINER"
+      LogsConfig:
+        CloudWatchLogs:
+          Status:  "ENABLED"
+        S3Logs:
+          Status:  "DISABLED"
+      QueuedTimeoutInMinutes: 480
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source:
+        InsecureSsl: false
+        Type: "CODEPIPELINE"
+      TimeoutInMinutes: 60
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Join [ '', [ !Ref 'AWS::StackName', 'Pipeline' ] ]
+      ArtifactStores:
+        - ArtifactStore:
+            Location: !Ref PipelineArtifsctStoreBucket
+            Type: "S3"
+          Region: !Ref 'AWS::Region'
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: "Source"
+          Actions:
+            - ActionTypeId:
+                Category: "Source"
+                Owner: "AWS"
+                Provider: "CodeCommit"
+                Version: "1"
+              Configuration:
+                BranchName: "master"
+                PollForSourceChanges: "false"
+                RepositoryName: !Ref CodeCommitRepositoryName
+              Name: "Source"
+              OutputArtifacts:
+                - Name: "SourceArtifact"
+              Region: !Ref 'AWS::Region'
+              RunOrder: 1
+        - Name: "Build"
+          Actions:
+            - ActionTypeId:
+                Category: "Build"
+                Owner: "AWS"
+                Provider: "CodeBuild"
+                Version: "1"
+              Configuration:
+                ProjectName: !Join [ '', [ !Ref 'AWS::StackName', 'Build' ] ]
+              InputArtifacts:
+                - Name: "SourceArtifact"
+              Name: "Build"
+              OutputArtifacts:
+                - Name: "CloudformationArtifact"
+              Region: !Ref 'AWS::Region'
+              RunOrder: 1
+        - Name: "Deploy"
+          Actions:
+            - ActionTypeId:
+                Category: "Deploy"
+                Owner: "AWS"
+                Provider: "CloudFormation"
+                Version: "1"
+              Configuration:
+                ActionMode: "CREATE_UPDATE"
+                Capabilities: "CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND"
+                RoleArn: !GetAtt CloudFormationRole.Arn
+                StackName: !Join [ '', [ !Ref 'AWS::StackName', 'SAM' ] ]
+                TemplateConfiguration: "SourceArtifact::packaged.dev.json"
+                TemplatePath: "CloudformationArtifact::packaged.yaml"
+              InputArtifacts:
+                - Name: SourceArtifact
+                - Name: CloudformationArtifact
+              Name: "Deploy"
+              Region: !Ref 'AWS::Region'
+              RunOrder: 1
+  CodePipelineTriggerEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - 'CodeCommit Repository State Change'
+        resources:
+          - !Ref CodeCommitRepositoryARN
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - master
+      Targets:
+        - Id: "codepipeline"
+          Arn: !Join [ '', [ 'arn:aws:codepipeline:', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', !Ref CodePipeline ] ]
+          RoleArn: !GetAtt TriggerEventRole.Arn
