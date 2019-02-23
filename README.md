@@ -1,4 +1,4 @@
-# sam-automation with CloudFormation
+# sam-automation with CloudFormation (alpha version)
 
 Pre-conditions
 
